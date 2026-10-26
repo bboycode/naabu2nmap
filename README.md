@@ -16,6 +16,7 @@ This tool reads line-delimited JSON (`jsonl`) from Naabu, groups ports by target
   - Hostnames also replace `.` with `_`
   - Unsafe filename characters are normalized to `_`
 - Writes output to `stdout` or a file
+- Filters targets by one or more selected ports and writes matching hosts to a file
 
 ## Build
 
@@ -43,6 +44,12 @@ go run . -input <naabu.jsonl> [flags]
 - `-output` (default: `-`)
   - Output path for generated commands
   - Use `-` to write to `stdout`
+- `-ports` (default: empty)
+  - Comma-separated port numbers to filter by, such as `80,443`
+  - Only matching hosts and selected ports appear in the results
+- `-hosts-output` (default: `filtered_hosts.txt`)
+  - Path for matching hosts when `-ports` is set
+  - Each host appears once, and filtered `nmap` commands read this file with `-iL`
 - `-use-host` (default: `true`)
   - Use JSON `host` value as scan target when available
   - If `false`, scans by IP instead
@@ -62,6 +69,14 @@ Save commands to file:
 ```bash
 go run . -input test_two.jsonl -output outputs/commands.txt
 ```
+
+Filter for ports 80 and 443, save matching hosts and their commands:
+
+```bash
+go run . -input test_two.jsonl -ports 80,443 -hosts-output outputs/web_hosts.txt -output outputs/web_commands.txt
+```
+
+The host file contains one hostname (or IP for IP-only records) per line. The command file uses `-iL outputs/web_hosts.txt` and scans only the selected ports found in the input. Nmap scans each listed host for every port in its command. TCP and UDP get separate commands and `-oA` names. If no hosts match, both files are empty.
 
 Read from stdin:
 
@@ -96,11 +111,18 @@ Only valid lines with a positive `port` and a non-empty `host` or `ip` are used.
 - TCP ports: no explicit scan type flag is added
 - UDP ports: `-sU` is added
 - Every generated command includes `-oA <name>`
+- With a port filter, commands use `-iL <hosts-output>` instead of individual targets
 
 Example output:
 
 ```bash
 nmap -sV -sC -Pn -p 80,443,8080 -oA api_alpha_local api.alpha.local
 nmap -sV -sC -Pn -sU -p 53,123 -oA api_alpha_local api.alpha.local
+```
+
+Filtered output example:
+
+```bash
+nmap -sV -sC -Pn -p 80,443 -oA web_hosts_tcp -iL outputs/web_hosts.txt
 ```
 

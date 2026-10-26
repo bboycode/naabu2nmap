@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"fmt"
 	"io"
+	"path/filepath"
 	"sort"
 	"strconv"
 	"strings"
@@ -64,16 +65,51 @@ func ParseNaabuJSONL(reader io.Reader) (map[string]*target, error) {
 	return targets, nil
 }
 
+func FilterTargetsByPorts(targets map[string]*target, selectedPorts map[int]struct{}) map[string]*target {
+	filtered := make(map[string]*target)
+	for key, original := range targets {
+		matchedPorts := make(map[string]map[int]struct{})
+		for protocol, ports := range original.ports {
+			for port := range ports {
+				if _, selected := selectedPorts[port]; !selected {
+					continue
+				}
+				if matchedPorts[protocol] == nil {
+					matchedPorts[protocol] = make(map[int]struct{})
+				}
+				matchedPorts[protocol][port] = struct{}{}
+			}
+		}
+		if len(matchedPorts) > 0 {
+			filtered[key] = &target{host: original.host, ip: original.ip, ports: matchedPorts}
+		}
+	}
+	return filtered
+}
+
+func TargetNames(targets map[string]*target, useHost bool) []string {
+	names := make(map[string]struct{})
+	for _, t := range targets {
+		if name := scanTargetName(t, useHost); name != "" {
+			names[name] = struct{}{}
+		}
+	}
+
+	result := make([]string, 0, len(names))
+	for name := range names {
+		result = append(result, name)
+	}
+	sort.Strings(result)
+	return result
+}
+
 func BuildNmapCommands(targets map[string]*target, useHost bool, baseArgs string) []string {
 	keys := sortedKeys(targets)
 	commands := make([]string, 0, len(keys))
 
 	for _, key := range keys {
 		t := targets[key]
-		targetName := t.ip
-		if useHost && strings.TrimSpace(t.host) != "" {
-			targetName = t.host
-		}
+		targetName := scanTargetName(t, useHost)
 
 		outputName := buildOutputName(t)
 		if outputName == "" {
@@ -90,24 +126,73 @@ func BuildNmapCommands(targets map[string]*target, useHost bool, baseArgs string
 				continue
 			}
 
-			joinedPorts := strings.Join(ports, ",")
-			args := strings.TrimSpace(baseArgs)
-			scanFlag := protocolScanFlag(protocol)
-			commandParts := []string{"nmap"}
-			if args != "" {
-				commandParts = append(commandParts, args)
-			}
-			if scanFlag != "" {
-				commandParts = append(commandParts, scanFlag)
-			}
-			commandParts = append(commandParts, "-p", joinedPorts, "-oA", outputName, targetName)
-
-			command := strings.Join(commandParts, " ")
-			commands = append(commands, command)
+			commands = append(commands, formatNmapCommand(baseArgs, protocol, ports, outputName, targetName))
 		}
 	}
 
 	return commands
+}
+
+func BuildFilteredNmapCommands(targets map[string]*target, useHost bool, baseArgs string, hostsPath string) []string {
+	portsByProtocol := make(map[string]map[int]struct{})
+	for _, t := range targets {
+		if scanTargetName(t, useHost) == "" {
+			continue
+		}
+		for protocol, ports := range t.ports {
+			if portsByProtocol[protocol] == nil {
+				portsByProtocol[protocol] = make(map[int]struct{})
+			}
+			for port := range ports {
+				portsByProtocol[protocol][port] = struct{}{}
+			}
+		}
+	}
+
+	outputName := sanitizeOutputName(strings.TrimSuffix(filepath.Base(hostsPath), filepath.Ext(hostsPath)))
+	if outputName == "" {
+		outputName = "filtered_hosts"
+	}
+
+	commands := make([]string, 0, len(portsByProtocol))
+	for _, protocol := range sortedKeysFromPortMap(portsByProtocol) {
+		ports := sortedPorts(portsByProtocol[protocol])
+		if len(ports) == 0 {
+			continue
+		}
+		commands = append(commands, formatNmapCommand(baseArgs, protocol, ports, outputName+"_"+protocol, "-iL", shellQuote(hostsPath)))
+	}
+	return commands
+}
+
+func formatNmapCommand(baseArgs string, protocol string, ports []string, outputName string, targetArgs ...string) string {
+	commandParts := []string{"nmap"}
+	if args := strings.TrimSpace(baseArgs); args != "" {
+		commandParts = append(commandParts, args)
+	}
+	if scanFlag := protocolScanFlag(protocol); scanFlag != "" {
+		commandParts = append(commandParts, scanFlag)
+	}
+	commandParts = append(commandParts, "-p", strings.Join(ports, ","), "-oA", outputName)
+	commandParts = append(commandParts, targetArgs...)
+	return strings.Join(commandParts, " ")
+}
+
+func shellQuote(value string) string {
+	for _, character := range value {
+		if (character >= 'a' && character <= 'z') || (character >= 'A' && character <= 'Z') || (character >= '0' && character <= '9') || strings.ContainsRune("/._-", character) {
+			continue
+		}
+		return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
+	}
+	return value
+}
+
+func scanTargetName(t *target, useHost bool) string {
+	if useHost && strings.TrimSpace(t.host) != "" {
+		return t.host
+	}
+	return t.ip
 }
 
 func buildOutputName(t *target) string {
