@@ -17,6 +17,7 @@ This tool reads line-delimited JSON (`jsonl`) from Naabu, groups ports by target
   - Unsafe filename characters are normalized to `_`
 - Writes output to `stdout` or a file
 - Filters targets by one or more selected ports and writes matching hosts to a file
+- Optionally prints a summary of discovered ports and hosts after generating commands
 
 ## Build
 
@@ -55,6 +56,8 @@ go run . -input <naabu.jsonl> [flags]
   - If `false`, scans by IP instead
 - `-base-args` (default: `-sV -sC -Pn`)
   - Base args prepended to each generated command
+- `-summary` (default: `false`)
+  - Print only the Naabu port and host summary to `stdout`
 
 ## Examples
 
@@ -125,4 +128,24 @@ Filtered output example:
 ```bash
 nmap -sV -sC -Pn -p 80,443 -oA web_hosts_tcp -iL outputs/web_hosts.txt
 ```
+
+## Summary
+
+Pass `-summary` to print only a summary of the Naabu findings to `stdout`. No Nmap commands or hosts files are generated in this mode; `-output` and `-hosts-output` are ignored. Add `-ports` to summarize only matching hosts and selected ports.
+
+```bash
+go run . -input test.jsonl -summary
+```
+
+```text
+Summary:
+  Hosts with open ports: 3
+  Distinct open ports: 2
+  Open host-port pairs: 4
+  Hosts by port:
+    80 : 3 hosts
+    161 : 1 host
+```
+
+Each port number is counted once per host, even if it appears in both TCP and UDP findings or in repeated JSONL rows.
 

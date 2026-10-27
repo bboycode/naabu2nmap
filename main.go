@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"io"
 	"os"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -19,6 +20,7 @@ func main() {
 	hostsOutputPath := flag.String("hosts-output", "filtered_hosts.txt", "Path for matching hosts when -ports is set")
 	useHost := flag.Bool("use-host", true, "Use host value as nmap target when available")
 	baseArgs := flag.String("base-args", "-sV -sC -Pn", "Common nmap args prepended to each command")
+	summaryFlag := flag.Bool("summary", false, "Print only a summary of open ports and hosts")
 	flag.Parse()
 
 	selectedPorts, err := parsePorts(*portsFlag)
@@ -26,7 +28,7 @@ func main() {
 		fmt.Fprintln(os.Stderr, err)
 		os.Exit(1)
 	}
-	if len(selectedPorts) > 0 && *hostsOutputPath == *outputPath {
+	if len(selectedPorts) > 0 && !*summaryFlag && *hostsOutputPath == *outputPath {
 		fmt.Fprintln(os.Stderr, "-hosts-output and -output must be different paths")
 		os.Exit(1)
 	}
@@ -46,9 +48,16 @@ func main() {
 		os.Exit(1)
 	}
 
-	var commands []string
 	if len(selectedPorts) > 0 {
 		targets = cmd.FilterTargetsByPorts(targets, selectedPorts)
+	}
+	if *summaryFlag {
+		printSummary(cmd.SummarizeTargets(targets, *useHost))
+		return
+	}
+
+	var commands []string
+	if len(selectedPorts) > 0 {
 		if err := writeLines(*hostsOutputPath, cmd.TargetNames(targets, *useHost)); err != nil {
 			fmt.Fprintln(os.Stderr, err)
 			os.Exit(1)
@@ -66,6 +75,28 @@ func main() {
 	if len(commands) == 0 && len(selectedPorts) == 0 {
 		fmt.Fprintln(os.Stderr, "no valid hosts/ports found in input")
 		os.Exit(1)
+	}
+
+}
+
+func printSummary(summary cmd.PortSummary) {
+	fmt.Fprintf(os.Stdout, "Summary:\n  Hosts with open ports: %d\n  Distinct open ports: %d\n  Open host-port pairs: %d\n  Hosts by port:\n", summary.Hosts, summary.DistinctPorts, summary.OpenHostPortPairs)
+
+	ports := make([]int, 0, len(summary.HostsByPort))
+	for port := range summary.HostsByPort {
+		ports = append(ports, port)
+	}
+	sort.Ints(ports)
+	if len(ports) == 0 {
+		fmt.Fprintln(os.Stdout, "    No matching hosts")
+	}
+	for _, port := range ports {
+		hostCount := summary.HostsByPort[port]
+		hostLabel := "hosts"
+		if hostCount == 1 {
+			hostLabel = "host"
+		}
+		fmt.Fprintf(os.Stdout, "    %d : %d %s\n", port, hostCount, hostLabel)
 	}
 }
 
